@@ -1,0 +1,69 @@
+---
+title: "Predicting weight lifting performance"
+author: "Kristina Plazonic"
+date: "02/22/2015"
+output: html_document
+---
+Predicting weight lifting performance
+=======================================
+
+```{r loading}
+suppressPackageStartupMessages(library(dplyr))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(randomForest))
+
+df = read.csv("pml-training.csv", sep = ",", na.strings = c("", " ", "NA", "#DIV/0!"))
+test = read.csv("pml-testing.csv", sep = ",", na.strings = c("", " ", "NA", "#DIV/0!"))
+```
+
+### Feature selection
+Original dataset contains 160 columns and is plagued by NA values, expressed as "NA", "" and "#DIV/0!". By inspecting the features, there are a number of features that are computed over a window of time (such as kurtosis, avg, max etc of original measurements), while other features are direct measurements of sensors on belt, arm, forearm and dumbbell. The feature "new_window" with values "yes" (406 values) or "no" indicates whether the observation is a direct measurement or a window measurement. I counted the number of missing values per column and saw there is a cutoff at 406 between precisely those features that had no missing values (60 columns) and those that were computed for newwindow="yes" such as kurtosis etc.  
+
+There are 52 features that are actually recorded for every observation from sensors, and these are: 
+{gyros, magnet, accel} x {belt, arm, forarm, dumbbell} x {x,y,z} (every combination of these makes 3x4x3=36 features) and {pitch, yaw, roll, total_accel} x {belt, arm, forarm, dumbbell} (every combination of these makes 4x4=16 features). This finishes feature selection. 
+```{r feature-selection}
+names = colnames(df)
+sum(df$new_window == "yes")
+features = apply(df, 2, function(x){sum(!is.na(x))}) > 406  ### select features without NA
+subdf = df[features]
+subdf = subdf[subdf$new_window == "no",8:60]
+names[features][8:60]
+```
+
+### Applying Random Forests to the dataset
+Random forests are very successful machine learning algorithm and my first choice. First we split the data set into a training (70%) and testing portion (30%).  I tried caret function train(classe ~ . , data = training, method = "rf") from the caret package, but it was too slow. The forum posters suggested using "randomForest" package directly - this drammatically improved performance.
+```{r training-model}
+inTrain = createDataPartition(y = subdf$classe, p = 0.7, list = FALSE)
+training = subdf[inTrain, ]
+testing = subdf[-inTrain, ]
+#modFit = train(classe ~ . , data = training, method = "rf", prox = TRUE) # too slow!!!
+set.seed(1234)
+fit = randomForest(classe ~ . , data = training, importance = TRUE)
+print(fit)
+```
+So, randomForest does wonderfully well on this data set, with predicted out-of-sample error estimate of only about 0.5%. Indeed, the model scored 20/20 on the test cases in the project. 
+
+### Predicting out-of-sample error
+Random forest algorithm actually has an in-built OOB error estimate, because the algorithm randomly chooses a subsample of the original data and a number of features (typically square root of n=52). Thus, it can use the observations not used on training a particular tree in estimating the out-of-samp estimate. However, we will, just for completeness, apply the model to the testing portion of the dataset, as this is something normally used with any machine-learning algorithm: 
+```{r out-of-sample-error}
+pp = predict(fit, newdata = testing[,-53])
+confusionMatrix(pp, testing[,53])
+```
+So, the out-of-sample error is about 0.5%. In other runs, the out-of-sample error was varying, but never more than 1%. In general, error on the testing set is expected to be higher than the estimate, as testing cases are completely new to the algorithm. 
+
+Note that normally we would have to divide the training set into k folds or apply the leave-one-out algorithm in order to predict the out-of-sample error rate (which we then check on computing the error rate on the testing set). However, here we have that estimate for free, as explained above, because of how random forest works. 
+
+### Obtaining predictions on the testing set (20 predictions)
+
+```{r answers}
+test_proj = test[,features][8:60]  # projecting the pml-testing.csv on our features
+answers = predict(fit, newdata = test_proj[,-53]) #getting my predictions
+```
+These scored 20/20. 
+
+### Plots
+
+Here is an interesting plot that shows which features are the most important ones for prediction: 
+```{r importance-plot, fig.height = 7}
+varImpPlot(fit)
+```
